@@ -1,0 +1,514 @@
+package com.example.dashboard.config;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import org.springframework.web.servlet.HandlerInterceptor;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+@Configuration
+public class WebConfig implements WebMvcConfigurer {
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        registry.addInterceptor(new HandlerInterceptor() {
+            @Override
+            public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+                System.out.println("DEBUG: Incoming Request -> " + request.getMethod() + " " + request.getRequestURI() + 
+                                   (request.getQueryString() != null ? "?" + request.getQueryString() : ""));
+                return true;
+            }
+        });
+    }
+}
+
+package com.example.dashboard.controller;
+
+import com.example.dashboard.service.PriceService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.*;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.*;
+
+@RestController
+@RequestMapping("/api")
+public class PriceController {
+
+    private final PriceService priceService;
+
+    @Autowired
+    public PriceController(PriceService priceService) {
+        this.priceService = priceService;
+    }
+
+    @GetMapping("/price")
+    public ResponseEntity<Map<String, Object>> getPrice(@RequestParam String symbol) {
+        return ResponseEntity.ok(priceService.getPrice(symbol));
+    }
+
+    @GetMapping("/history")
+    public ResponseEntity<Map<String, Object>> getHistory(@RequestParam String symbol, @RequestParam(defaultValue = "15m") String interval) {
+        return ResponseEntity.ok(priceService.getHistory(symbol, interval));
+    }
+}
+
+package com.example.dashboard.controller;
+
+import com.example.dashboard.service.SentimentService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.Map;
+
+@RestController
+@CrossOrigin(origins = {
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8081",
+        "http://localhost:8000"
+})
+public class SentimentController {
+
+    private final SentimentService sentimentService;
+
+    @Autowired
+    public SentimentController(SentimentService sentimentService) {
+        this.sentimentService = sentimentService;
+    }
+
+    @GetMapping("/api/sentiment")
+    public ResponseEntity<?> getSentiment(@RequestParam String stock, @RequestParam(required = false) String name) {
+        Map<String, Object> result = sentimentService.getSentiment(stock, name);
+        if ("error".equals(result.get("status"))) {
+            return ResponseEntity.internalServerError().body(result);
+        }
+        return ResponseEntity.ok(result);
+    }
+
+    @GetMapping("/api/validateStock")
+    public ResponseEntity<?> validateStock(@RequestParam String stock) {
+        Map<String, Object> result = sentimentService.validateStock(stock);
+        if (result.containsKey("valid") && !(Boolean) result.get("valid")) {
+            if (result.containsKey("message") && result.get("message").toString().contains("required")) {
+                return ResponseEntity.badRequest().body(result);
+            }
+        }
+        return ResponseEntity.ok(result);
+    }
+}
+
+package com.example.dashboard.controller;
+
+import com.example.dashboard.service.SuggestionService;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/suggestions")
+public class SuggestionController {
+
+    private final SuggestionService service;
+
+    public SuggestionController(SuggestionService service) {
+        this.service = service;
+    }
+
+    @GetMapping("/rsi/{symbol}")
+    public String rsi(@PathVariable String symbol, @RequestParam(required = false) String interval) {
+        return service.getRSI(symbol, interval);
+    }
+
+    @GetMapping("/macd/{symbol}")
+    public String macd(@PathVariable String symbol, @RequestParam(required = false) String interval) {
+        return service.getMACD(symbol, interval);
+    }
+}
+
+package com.example.dashboard.controller;
+
+import com.example.dashboard.dto.AuthRequest;
+import com.example.dashboard.dto.AuthResponse;
+import com.example.dashboard.dto.ForgotPasswordRequest;
+import com.example.dashboard.service.UserService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/auth")
+public class UserController {
+
+    private final UserService userService;
+
+    @Autowired
+    public UserController(UserService userService) {
+        this.userService = userService;
+    }
+
+    @PostMapping("/signup")
+    public ResponseEntity<AuthResponse> register(@RequestBody AuthRequest request) {
+        try {
+            AuthResponse response = userService.registerUser(request);
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+            }
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new AuthResponse(false, "An error occurred during registration."));
+        }
+    }
+
+    @RequestMapping(value = "/signup-otp", method = {RequestMethod.POST, RequestMethod.GET})
+    public ResponseEntity<AuthResponse> sendSignupOtp(@RequestParam String telegramChatId) {
+        try {
+            AuthResponse response = userService.sendSignupOtp(telegramChatId);
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+            }
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new AuthResponse(false, "Failed to send verification code."));
+        }
+    }
+
+    @PostMapping("/login")
+    public ResponseEntity<AuthResponse> login(@RequestBody AuthRequest request) {
+        try {
+            AuthResponse response = userService.loginUser(request);
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(response);
+            }
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new AuthResponse(false, "An error occurred during login."));
+        }
+    }
+
+    @PostMapping("/login-verify")
+    public ResponseEntity<AuthResponse> loginVerify(@RequestBody AuthRequest request) {
+        try {
+            AuthResponse response = userService.verifyLoginOtp(request);
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+            }
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new AuthResponse(false, "An error occurred during login verification."));
+        }
+    }
+
+    @PostMapping("/forgot-password-request")
+    public ResponseEntity<AuthResponse> forgotPasswordRequest(@RequestParam String username) {
+        try {
+            AuthResponse response = userService.requestPasswordReset(username);
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+            }
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new AuthResponse(false, "An error occurred while requesting reset code."));
+        }
+    }
+
+    @PostMapping("/forgot-password")
+    public ResponseEntity<AuthResponse> forgotPassword(@RequestBody ForgotPasswordRequest request) {
+        try {
+            AuthResponse response = userService.resetPassword(request);
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+            }
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new AuthResponse(false, "An error occurred while resetting password."));
+        }
+    }
+}
+
+package com.example.dashboard.controller;
+
+import com.example.dashboard.dto.WatchlistRequest;
+import com.example.dashboard.dto.WatchlistResponse;
+import com.example.dashboard.model.User;
+import com.example.dashboard.model.Watchlist;
+import com.example.dashboard.repository.UserRepository;
+import com.example.dashboard.repository.WatchlistRepository;
+import com.example.dashboard.service.PriceService;
+import com.example.dashboard.service.SentimentService;
+import com.example.dashboard.service.TelegramService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
+
+@RestController
+@RequestMapping("/api/watchlist")
+public class WatchlistController {
+
+    private final WatchlistRepository watchlistRepository;
+    private final UserRepository userRepository;
+    private final PriceService priceService;
+    private final SentimentService sentimentService;
+    private final TelegramService telegramService;
+
+    @Autowired
+    public WatchlistController(WatchlistRepository watchlistRepository, 
+                               UserRepository userRepository,
+                               PriceService priceService,
+                               SentimentService sentimentService,
+                               TelegramService telegramService) {
+        this.watchlistRepository = watchlistRepository;
+        this.userRepository = userRepository;
+        this.priceService = priceService;
+        this.sentimentService = sentimentService;
+        this.telegramService = telegramService;
+    }
+
+    @GetMapping("/{userId}")
+    public ResponseEntity<WatchlistResponse> getWatchlist(@PathVariable Long userId) {
+        try {
+            List<Watchlist> watchlists = watchlistRepository.findByUserId(userId);
+            List<Map<String, Object>> data = watchlists.stream().map(w -> {
+                Map<String, Object> map = new HashMap<>();
+                map.put("symbol", w.getSymbol());
+                map.put("alertType", w.getAlertType());
+                map.put("targetPercentage", w.getTargetPercentage());
+                map.put("targetValue", w.getTargetValue());
+                map.put("alertDirection", w.getAlertDirection());
+                return map;
+            }).collect(Collectors.toList());
+            return ResponseEntity.ok(new WatchlistResponse(true, "Watchlist fetched", data));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new WatchlistResponse(false, "Failed to fetch watchlist"));
+        }
+    }
+
+    @PostMapping
+    public ResponseEntity<WatchlistResponse> addToWatchlist(@RequestBody WatchlistRequest request) {
+        try {
+            if (request.getUserId() == null || request.getSymbol() == null || request.getSymbol().trim().isEmpty()) {
+                return ResponseEntity.badRequest().body(new WatchlistResponse(false, "Invalid request"));
+            }
+
+            String symbol = request.getSymbol().toUpperCase();
+
+            if (watchlistRepository.existsByUserIdAndSymbol(request.getUserId(), symbol)) {
+                return ResponseEntity.ok(new WatchlistResponse(true, "Symbol already in watchlist"));
+            }
+
+            Optional<User> userOpt = userRepository.findById(request.getUserId());
+            if (userOpt.isEmpty()) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new WatchlistResponse(false, "User not found"));
+            }
+
+            Watchlist watchlist = new Watchlist(userOpt.get(), symbol);
+            watchlistRepository.save(watchlist);
+
+            // Trigger Telegram Notification Asynchronously
+            CompletableFuture.runAsync(() -> {
+                try {
+                    User user = userOpt.get();
+                    String userChatId = user.getTelegramChatId();
+                    
+                    if (userChatId == null || userChatId.isEmpty()) {
+                        System.out.println("User " + user.getUsername() + " has not linked Telegram.");
+                        return;
+                    }
+
+                    Map<String, Object> priceData = priceService.getPrice(symbol);
+                    
+                    // Use company name from price data for better news search coverage
+                    String companyName = priceData.containsKey("name") && priceData.get("name") != null 
+                        ? priceData.get("name").toString() : null;
+                    Map<String, Object> sentimentData = sentimentService.getSentiment(symbol, companyName);
+                    
+                    String price = priceData.getOrDefault("price", "N/A").toString();
+                    String open = priceData.getOrDefault("open", "N/A").toString();
+                    String currency = priceData.getOrDefault("currencySymbol", "$").toString();
+                    // narrative is now always set — never falls back to "No analysis available."
+                    String narrative = sentimentData.getOrDefault("narrative", 
+                        "📰 Analysis unavailable at this time. Check financial news sites for updates.").toString();
+
+                    telegramService.sendStockNotification(
+                        userChatId,
+                        symbol, 
+                        currency + open, 
+                        currency + price, 
+                        narrative
+                    );
+                } catch (Exception e) {
+                    System.err.println("Error sending background telegram notification: " + e.getMessage());
+                }
+            });
+
+            return ResponseEntity.ok(new WatchlistResponse(true, "Added to watchlist. Telegram alert will be sent if linked!"));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new WatchlistResponse(false, "Failed to add to watchlist"));
+        }
+    }
+
+    @PutMapping("/telegram/{userId}")
+    public ResponseEntity<WatchlistResponse> updateTelegramChatId(@PathVariable Long userId, @RequestBody Map<String, String> body) {
+        try {
+            String chatId = body.get("chatId");
+            if (chatId == null || chatId.trim().isEmpty()) {
+                return ResponseEntity.badRequest().body(new WatchlistResponse(false, "Chat ID is required"));
+            }
+
+            Optional<User> userOpt = userRepository.findById(userId);
+            if (userOpt.isEmpty()) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new WatchlistResponse(false, "User not found"));
+            }
+
+            User user = userOpt.get();
+            user.setTelegramChatId(chatId.trim());
+            userRepository.save(user);
+
+            return ResponseEntity.ok(new WatchlistResponse(true, "Telegram Chat ID updated successfully"));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new WatchlistResponse(false, "Failed to update Telegram Chat ID"));
+        }
+    }
+
+    @PutMapping("/alert")
+    public ResponseEntity<WatchlistResponse> updateWatchlistAlert(@RequestBody WatchlistRequest request) {
+        try {
+            if (request.getUserId() == null || request.getSymbol() == null) {
+                return ResponseEntity.badRequest().body(new WatchlistResponse(false, "Invalid request"));
+            }
+
+            Optional<User> userOpt = userRepository.findById(request.getUserId());
+            if (userOpt.isEmpty()) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new WatchlistResponse(false, "User not found"));
+            }
+            User user = userOpt.get();
+
+            Optional<Watchlist> watchlistOpt = watchlistRepository.findByUserId(request.getUserId()).stream()
+                    .filter(w -> w.getSymbol().equalsIgnoreCase(request.getSymbol()))
+                    .findFirst();
+
+            if (watchlistOpt.isEmpty()) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new WatchlistResponse(false, "Symbol not found in watchlist"));
+            }
+
+            Watchlist watchlist = watchlistOpt.get();
+            watchlist.setInitialPrice(request.getInitialPrice());
+            
+            String type = request.getAlertType();
+            if (type == null || type.trim().isEmpty()) {
+                type = "PERCENTAGE";
+            }
+            watchlist.setAlertType(type.toUpperCase());
+
+            if ("PERCENTAGE".equalsIgnoreCase(type)) {
+                watchlist.setTargetPercentage(request.getTargetPercentage());
+                watchlist.setTargetValue(null);
+            } else {
+                watchlist.setTargetValue(request.getTargetValue());
+                watchlist.setTargetPercentage(null);
+            }
+            
+            // Set alert direction, defaulting to "BOTH" if not provided
+            String dir = request.getAlertDirection();
+            if (dir == null || dir.trim().isEmpty()) {
+                dir = "BOTH";
+            }
+            watchlist.setAlertDirection(dir.toUpperCase());
+            
+            watchlistRepository.save(watchlist);
+            
+            boolean telegramNotSet = (user.getTelegramChatId() == null || user.getTelegramChatId().trim().isEmpty());
+            
+            // Trigger instant "Alert Set" notification via Telegram
+            if (!telegramNotSet) {
+                final String currentSymbol = watchlist.getSymbol();
+                final String alertType = watchlist.getAlertType();
+                final String direction = watchlist.getAlertDirection();
+                final Double targetP = watchlist.getTargetPercentage();
+                final Double targetV = watchlist.getTargetValue();
+                final Double initialP = watchlist.getInitialPrice();
+                final String chatID = user.getTelegramChatId();
+
+                CompletableFuture.runAsync(() -> {
+                    try {
+                        String targetNote = "";
+                        if ("PERCENTAGE".equalsIgnoreCase(alertType)) {
+                            double deltaVal = (initialP * targetP) / 100.0;
+                            targetNote = String.format("Calculating to: $%.2f (Δ $%.2f)", 
+                                (direction.equals("DOWN") ? initialP - deltaVal : initialP + deltaVal), deltaVal);
+                        } else {
+                            double pointDelta = targetV - initialP;
+                            double percDelta = (pointDelta / initialP) * 100.0;
+                            targetNote = String.format("Movement: %+.2f (%+.2f%%)", pointDelta, percDelta);
+                        }
+
+                        String targetStr = "PERCENTAGE".equalsIgnoreCase(alertType) ? targetP + "%" : "$" + targetV;
+                        String msg = String.format(
+                            "🔔 *Price Alert Activated* 🔔\n\n" +
+                            "Stock: *%s*\n" +
+                            "Type: %s\n" +
+                            "Target: %s\n" +
+                            "Details: %s\n" +
+                            "Initial Price: %.2f\n" +
+                            "Direction: %s\n\n" +
+                            "You will be notified as soon as the target is reached.",
+                            currentSymbol, alertType, targetStr, targetNote, initialP, direction
+                        );
+                        telegramService.sendStockNotification(chatID, currentSymbol, "N/A", "Alert Set", msg);
+                    } catch (Exception e) {
+                        System.err.println("Failed to send instant alert notification: " + e.getMessage());
+                    }
+                });
+            }
+            
+            return ResponseEntity.ok(new WatchlistResponse(true, "Alert set successfully", Map.of("telegramNotSet", telegramNotSet)));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new WatchlistResponse(false, "Failed to set alert"));
+        }
+    }
+
+    @DeleteMapping
+    @Transactional
+    public ResponseEntity<WatchlistResponse> removeFromWatchlist(@RequestBody WatchlistRequest request) {
+        try {
+            if (request.getUserId() == null || request.getSymbol() == null) {
+                return ResponseEntity.badRequest().body(new WatchlistResponse(false, "Invalid request"));
+            }
+
+            watchlistRepository.deleteByUserIdAndSymbol(request.getUserId(), request.getSymbol().toUpperCase());
+            return ResponseEntity.ok(new WatchlistResponse(true, "Removed from watchlist"));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new WatchlistResponse(false, "Failed to remove from watchlist"));
+        }
+    }
+}
